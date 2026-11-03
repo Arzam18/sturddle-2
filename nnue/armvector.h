@@ -12,9 +12,11 @@
         #define INSTRSET 7 /* use Vec8f half-precision implementation */
         #define ARCH "ARM64/FP16"
     #else
+        #define INSTRSET 6 /* baseline NEON: use the Vec4f path */
         #define ARCH "ARM64"
     #endif
 #else
+    #define INSTRSET 6 /* baseline ARM NEON: use the Vec4f path */
     #define ARCH "ARM"
 #endif
 
@@ -324,7 +326,13 @@ INLINE Vec8s operator >> (Vec8s a, int b)
 
 INLINE Vec8s operator << (Vec8s a, int b)
 {
-    return _mm_slli_epi16(a, b);
+    // _mm_slli_epi16 maps to an immediate-only NEON intrinsic in SIMDe.
+    // NNUE supplies the shift count as a runtime parameter, so use NEON's
+    // variable-shift instruction instead. Positive counts shift left and
+    // counts >= 16 naturally produce zero, matching packed 16-bit shifts.
+    const int16x8_t value = vreinterpretq_s16_s64(static_cast<__m128i>(a));
+    const int16x8_t shift = vdupq_n_s16(static_cast<int16_t>(b));
+    return Vec8s(vreinterpretq_s64_s16(vshlq_s16(value, shift)));
 }
 
 /** High 16 bits of the signed 16 x 16 products; not vqdmulh, which doubles them */
