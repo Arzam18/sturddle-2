@@ -102,7 +102,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/make-native.py ARM64
+          python3 tools/make-native.py ARM64 --embed-asm
 
       - name: Verify Android executable and runtime dependencies
         shell: bash
@@ -139,7 +139,7 @@ jobs:
 
           mkdir -p dist/android-arm64
           cp "$ENGINE" dist/android-arm64/
-          cp weights.bin book.bin dist/android-arm64/
+          cp book.bin dist/android-arm64/
           sha256sum dist/android-arm64/* > dist/android-arm64/SHA256SUMS
           (cd dist && zip -9 -r Sturddle-2-Android-ARM64-NEON.zip android-arm64)
 
