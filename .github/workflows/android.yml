@@ -12,6 +12,7 @@ on:
       - '**/*.cpp'
       - '**/*.h'
       - 'weights.bin'
+      - 'weights.bin.gz'
       - 'weights.bin.sha256'
       - 'book.bin'
       - '.gitmodules'
@@ -78,14 +79,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -s weights.bin ]]; then
-            echo "weights.bin is not in this checkout; fetching the upstream model file."
-            curl --fail --location --retry 3 --connect-timeout 30 \
-              https://raw.githubusercontent.com/cristivlas/sturddle-2/master/weights.bin \
-              --output weights.bin
+          # The repository stores the NNUE network as weights.bin.gz.
+          # tools/fetch_weights.py decompresses it and verifies weights.bin
+          # against the committed weights.bin.sha256 checksum.
+          # Reuse a valid unpacked model when present. Otherwise, fetch the
+          # repository's compressed model; fetch_weights.py verifies the
+          # decompressed result against the committed SHA-256 checksum.
+          if [[ ! -s weights.bin ]] || ! python3 tools/fetch_weights.py >/dev/null 2>&1; then
+            if [[ ! -s weights.bin.gz ]]; then
+              echo "NNUE model is absent; fetching weights.bin.gz from Arzam18/sturddle-2."
+              curl --fail --location --retry 3 --retry-all-errors --connect-timeout 30 \
+                https://raw.githubusercontent.com/Arzam18/sturddle-2/master/weights.bin.gz \
+                --output weights.bin.gz
+            fi
           fi
           test -s book.bin
+          test -s weights.bin.sha256
           python3 tools/fetch_weights.py
+          test -s weights.bin
 
       - name: Build native Android ARM64 NEON UCI executable
         shell: bash
