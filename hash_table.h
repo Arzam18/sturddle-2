@@ -93,7 +93,7 @@ template <typename T>
 class mmap_allocator
 {
 public:
-    static constexpr size_t PAGE_SIZE = 4096;
+    static constexpr size_t MMAP_PAGE_SIZE = 4096;
 
     using value_type = T;
     using pointer = T *;
@@ -127,7 +127,7 @@ public:
         constexpr size_t header_size = sizeof(allocation_header);
         static_assert(header_size == CACHE_LINE_SIZE);
         const auto user_bytes = n * sizeof(value_type);
-        const auto total_bytes = ((header_size + user_bytes + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+        const auto total_bytes = ((header_size + user_bytes + MMAP_PAGE_SIZE - 1) / MMAP_PAGE_SIZE) * MMAP_PAGE_SIZE;
 
         HANDLE h_mapping = ::CreateFileMapping(
             INVALID_HANDLE_VALUE,
@@ -157,7 +157,7 @@ public:
         return reinterpret_cast<pointer>(header + 1);
 
 #else
-        const auto bytes = ((n * sizeof(value_type) + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+        const auto bytes = ((n * sizeof(value_type) + MMAP_PAGE_SIZE - 1) / MMAP_PAGE_SIZE) * MMAP_PAGE_SIZE;
         void* ptr = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (ptr == MAP_FAILED)
             throw std::bad_alloc();
@@ -184,7 +184,7 @@ public:
         // POSIX implementation
         if (p)
         {
-            const auto bytes = ((n * sizeof(value_type) + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+            const auto bytes = ((n * sizeof(value_type) + MMAP_PAGE_SIZE - 1) / MMAP_PAGE_SIZE) * MMAP_PAGE_SIZE;
             ::munmap(p, bytes);
         }
 #endif /* !_WIN32 */
