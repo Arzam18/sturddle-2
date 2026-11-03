@@ -222,22 +222,28 @@ def main():
     parser = argparse.ArgumentParser(description='Build native Sturddle binary')
     parser.add_argument('arch', nargs='?', default='native', choices=list(ARCH_FLAGS.keys()), help='Target SIMD architecture')
     parser.add_argument('--embed', action='store_true',
-                        help='Embed weights.bin in the binary via #embed (no separate weights.bin needed at runtime).')
+                        help='Embed weights.bin in the binary via C++26 #embed (requires compiler support).')
+    parser.add_argument('--embed-asm', action='store_true',
+                        help='Embed weights.bin using an assembler .incbin object (works with Android NDK Clang).')
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     version = parse_version()
     build_stamp = datetime.now().strftime('%m%d%y')
 
-    embed = args.embed
+    if args.embed and args.embed_asm:
+        parser.error('--embed and --embed-asm are mutually exclusive')
+    embed = args.embed or args.embed_asm
 
     # weights.bin is needed either way: #embed reads it at compile time, the
     # shared build copies it next to the exe. Decompress/verify it in-process
     # (same as setup.py) so a clean checkout with only weights.bin.gz works.
     fetch_weights.ensure()
 
-    defines = DEFINES if embed else DEFINES + ['SHARED_WEIGHTS']
+    defines = (DEFINES + ['EMBED_WEIGHTS_ASM']) if args.embed_asm else (DEFINES if args.embed else DEFINES + ['SHARED_WEIGHTS'])
     define_args = [f'-D{d}' for d in defines] + [f'-DBUILD_STAMP={build_stamp}']
+    if args.embed_asm:
+        SOURCES.append('nnue/weights_blob.S')
 
     if sys.platform.startswith('win'):
         exe = build_windows(args.arch, version, define_args)
