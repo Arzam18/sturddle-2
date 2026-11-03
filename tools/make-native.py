@@ -161,7 +161,6 @@ def build_linux(arch, version, define_args):
         cxxflags += ['-stdlib=libc++', '-fPIE', '-pthread']
         cxxflags += [
             '-Wno-macro-redefined', '-Wno-deprecated-declarations',
-            '-Wno-nan-infinity-disabled',
         ]
     elif is_clang:
         cxxflags += [
