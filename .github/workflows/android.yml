@@ -1,0 +1,141 @@
+name: Build Sturddle Android ARM64 NEON
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/android.yml'
+      - 'tools/make-native.py'
+      - '**/*.cpp'
+      - '**/*.h'
+      - 'weights.bin'
+      - 'weights.bin.sha256'
+      - 'book.bin'
+      - '.gitmodules'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android ARM64 (NEON, API 24)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Android NDK r27c
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Configure Android cross-compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK_PATH='${{ steps.ndk.outputs.ndk-path }}'
+          NDK_BIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CXX="$NDK_BIN/aarch64-linux-android24-clang++"
+
+          test -x "$CXX" || {
+            echo "::error::Android ARM64 Clang wrapper not found: $CXX"
+            exit 1
+          }
+
+          TARGET="$($CXX -dumpmachine)"
+          echo "Compiler target: $TARGET"
+          [[ "$TARGET" == aarch64* && "$TARGET" == *android* ]] || {
+            echo "::error::Compiler is not targeting Android AArch64: $TARGET"
+            exit 1
+          }
+
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "NDK_BIN=$NDK_BIN" >> "$GITHUB_ENV"
+          echo "CXX=$CXX" >> "$GITHUB_ENV"
+          "$CXX" --version
+
+      - name: Verify source submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule status --recursive
+          test -f libpopcnt/libpopcnt.h
+          test -f nnue/simde/simde/x86/avx2.h
+          test -f nnue/version2/vectorclass.h
+          test -f Fathom/src/tbprobe.c
+          test -d magic-bits/include
+
+      - name: Verify NNUE network and opening book
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s weights.bin ]]; then
+            echo "weights.bin is not in this checkout; fetching the upstream model file."
+            curl --fail --location --retry 3 --connect-timeout 30 \
+              https://raw.githubusercontent.com/cristivlas/sturddle-2/master/weights.bin \
+              --output weights.bin
+          fi
+          test -s book.bin
+          python3 tools/fetch_weights.py
+
+      - name: Build native Android ARM64 NEON UCI executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/make-native.py ARM64
+
+      - name: Verify Android executable and runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE="$(find dist/native -maxdepth 1 -type f -name 'sturddle-*-arm64-neon' -print -quit)"
+          test -n "$ENGINE" || {
+            echo "::error::Android ARM64 executable was not produced."
+            exit 1
+          }
+          test -s "$ENGINE"
+          chmod +x "$ENGINE"
+
+          "$NDK_BIN/llvm-strip" --strip-debug "$ENGINE"
+          file "$ENGINE"
+
+          "$NDK_BIN/llvm-readelf" -h "$ENGINE" | tee /tmp/elf-header.txt
+          grep -q 'AArch64' /tmp/elf-header.txt || {
+            echo "::error::Wrong executable architecture; expected AArch64."
+            exit 1
+          }
+
+          "$NDK_BIN/llvm-readelf" -l "$ENGINE" | tee /tmp/elf-program-headers.txt
+          grep -q '/system/bin/linker64' /tmp/elf-program-headers.txt || {
+            echo "::error::Expected Android Bionic linker /system/bin/linker64."
+            exit 1
+          }
+
+          "$NDK_BIN/llvm-readelf" -d "$ENGINE" | tee /tmp/elf-dynamic.txt
+          if grep -Eq 'libc\+\+_shared\.so|libstdc\+\+\.so|libgcc_s\.so' /tmp/elf-dynamic.txt; then
+            echo "::error::Unexpected external C++ runtime dependency. Expected statically linked libc++."
+            exit 1
+          fi
+
+          mkdir -p dist/android-arm64
+          cp "$ENGINE" dist/android-arm64/
+          cp weights.bin book.bin dist/android-arm64/
+          sha256sum dist/android-arm64/* > dist/android-arm64/SHA256SUMS
+          (cd dist && zip -9 -r Sturddle-2-Android-ARM64-NEON.zip android-arm64)
+
+      - name: Upload Android ARM64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sturddle-2-Android-ARM64-NEON
+          path: dist/Sturddle-2-Android-ARM64-NEON.zip
+          if-no-files-found: error
+          compression-level: 0
