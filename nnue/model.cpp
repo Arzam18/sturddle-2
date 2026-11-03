@@ -24,7 +24,7 @@
 
 using namespace nnue;
 
-#if SHARED_WEIGHTS
+#if defined(SHARED_WEIGHTS)
 
 void Model::init()
 {
@@ -32,6 +32,34 @@ void Model::init()
     {
         load_weights(default_weights_path);
     }
+}
+
+#elif defined(EMBED_WEIGHTS_ASM)
+
+/* The Android build embeds the network as raw read-only data using .incbin.
+ * This works with the NDK Clang version (18) without C++26 #embed support. */
+extern "C" const unsigned char sturddle_weights_start[];
+extern "C" const unsigned char sturddle_weights_end[];
+
+void Model::init()
+{
+    const size_t size = static_cast<size_t>(sturddle_weights_end - sturddle_weights_start);
+    const size_t expected = param_count() * sizeof(float);
+    if (size != expected)
+        throw std::runtime_error("Embedded NNUE size mismatch: expected " + std::to_string(expected) + " bytes, got " + std::to_string(size));
+
+    struct membuf : std::streambuf
+    {
+        membuf(const char* data, size_t length)
+        {
+            char* p = const_cast<char*>(data);
+            setg(p, p, p + length);
+        }
+    } buf(reinterpret_cast<const char*>(sturddle_weights_start), size);
+
+    std::istream file(&buf);
+    file.exceptions(std::ios::failbit | std::ios::badbit);
+    load_layers(file);
 }
 
 #else
