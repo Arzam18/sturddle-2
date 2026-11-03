@@ -5,7 +5,7 @@ Build native Sturddle executable (no Python runtime embedded).
 Usage:
     python tools/make-native.py [ARCH] [--embed]
 
-ARCH is one of: native (default), AVX, AVX2, AVX2_VNNI, AVX512, AVX512_BF16.
+ARCH is one of: native (default), AVX, AVX2, AVX2_VNNI, AVX512, AVX512_BF16, ARM64.
 
 By default the weights are shared: weights.bin is loaded at runtime from next
 to the binary. With --embed, weights.bin is baked into the binary via C23/C++26
@@ -36,11 +36,15 @@ ARCH_FLAGS = {
     'AVX2_VNNI':   ['-march=alderlake', '-mtune=raptorlake'],
     'AVX512':      ['-march=skylake-avx512', '-mtune=skylake-avx512'],
     'AVX512_BF16': ['-march=cooperlake', '-mtune=znver4'],
+    # ARMv8-A guarantees Advanced SIMD (NEON); do not use -march=native
+    # when cross-compiling, because that describes the x86-64 build host.
+    'ARM64':       ['-march=armv8-a+simd', '-mtune=generic'],
 }
 
 ARCH_SUFFIX = {
     'native': '', 'AVX': '-avx', 'AVX2': '-avx2',
     'AVX2_VNNI': '-avx2-vnni', 'AVX512': '-avx512', 'AVX512_BF16': '-avx512-bf16',
+    'ARM64': '-arm64-neon',
 }
 
 SOURCES = ['chess.cpp', 'context.cpp', 'search.cpp', 'uci_native.cpp', 'tbprobe.cpp', 'main_native.cpp', 'nnue/model.cpp']
@@ -130,6 +134,12 @@ def build_linux(arch, version, define_args):
     cc_ver = int(m.group(1))
     is_clang = 'clang' in Path(cxx).name
     triplet = subprocess.check_output([cxx, '-dumpmachine'], text=True).strip()
+    is_android = 'android' in triplet.lower()
+
+    if arch == 'ARM64' and not triplet.lower().startswith(('aarch64', 'arm64')):
+        sys.exit(f'ERROR: ARM64 build requires an AArch64 compiler target; got {triplet}')
+    if is_android and arch != 'ARM64':
+        sys.exit(f'ERROR: Android target {triplet} must be built with ARCH=ARM64')
 
     if is_clang and cc_ver < 16:
         sys.exit(f'ERROR: {cxx} v{cc_ver}. clang >= 16 required.')
@@ -145,7 +155,15 @@ def build_linux(arch, version, define_args):
         '-Wno-empty-body', '-Wno-int-in-bool-context',
         '-fno-stack-protector', '-D_FORTIFY_SOURCE=0',
     ]
-    if is_clang:
+    if is_android:
+        # NDK clang uses libc++ by default. Select its static runtime so the
+        # standalone UCI executable does not require libc++_shared.so beside it.
+        cxxflags += ['-stdlib=libc++', '-fPIE', '-pthread']
+        cxxflags += [
+            '-Wno-macro-redefined', '-Wno-deprecated-declarations',
+            '-Wno-nan-infinity-disabled',
+        ]
+    elif is_clang:
         cxxflags += [
             '-Wno-macro-redefined', '-Wno-deprecated-declarations',
             '-Wno-nan-infinity-disabled',
@@ -172,15 +190,21 @@ def build_linux(arch, version, define_args):
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
             objs = list(pool.map(compile_one, SOURCES))
 
-        link_cmd = [cxx] + [str(o) for o in objs] + ['-o', str(exe), '-lpthread']
-        if is_clang:
-            link_cmd += [
-                '-fuse-ld=lld',
-                f'-L/usr/lib/llvm-{cc_ver}/lib/',
-                f'-L/usr/lib/llvm-{cc_ver}/lib/{triplet}',
-                '-L/usr/local/opt/llvm/lib/c++',
-                '-stdlib=libc++', '-lc++', '-lc++abi', '-lc++experimental',
-            ]
+        link_cmd = [cxx] + [str(o) for o in objs] + ['-o', str(exe)]
+        if is_android:
+            # Android requires PIE executables (API 21+). -static-libstdc++ is
+            # the NDK driver's documented switch for static libc++ linkage.
+            link_cmd += ['-pie', '-static-libstdc++', '-pthread']
+        else:
+            link_cmd += ['-lpthread']
+            if is_clang:
+                link_cmd += [
+                    '-fuse-ld=lld',
+                    f'-L/usr/lib/llvm-{cc_ver}/lib/',
+                    f'-L/usr/lib/llvm-{cc_ver}/lib/{triplet}',
+                    '-L/usr/local/opt/llvm/lib/c++',
+                    '-stdlib=libc++', '-lc++', '-lc++abi', '-lc++experimental',
+                ]
         print(' '.join(link_cmd))
         rc = subprocess.call(link_cmd, cwd=REPO_ROOT)
         if rc != 0:
