@@ -156,9 +156,10 @@ def build_linux(arch, version, define_args):
         '-fno-stack-protector', '-D_FORTIFY_SOURCE=0',
     ]
     if is_android:
-        # NDK clang uses libc++ by default. Select its static runtime so the
-        # standalone UCI executable does not require libc++_shared.so beside it.
-        cxxflags += ['-stdlib=libc++', '-fPIE', '-pthread']
+        # Android NDK Clang targets libc++ by default. Do not pass -stdlib:
+        # the driver treats it as unused for assembler inputs, and -Werror
+        # turns that harmless warning into a build failure for weights_blob.S.
+        cxxflags += ['-fPIE', '-pthread']
         cxxflags += [
             '-Wno-macro-redefined', '-Wno-deprecated-declarations',
         ]
